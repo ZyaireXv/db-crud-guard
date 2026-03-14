@@ -25,6 +25,45 @@
 参考 https://github.com/ZyaireXv/db-crud-guard/blob/main/CODEX_INSTALL.md 安装 skills。
 ```
 
+## 自然语言使用（推荐）
+
+安装完成后，正常使用时不需要记脚本命令，直接把数据库配置和目标告诉 agent 即可。
+
+在 skill 已安装、Python 依赖已就绪的前提下，agent 会自动复用 `db-crud-guard` 的连接管理和 SQL 执行能力，不需要你手工拼命令。
+
+例如你可以直接这样说：
+
+```text
+为 db-crud-guard 添加一个 mysql 连接，ip 是 10.1.1.1，默认端口，用户名 user，密码 user。
+```
+
+```text
+帮我对比一下表1和表2 的区别。
+```
+
+```text
+分析一下 member_user 表结构有哪些缺点。
+```
+
+```text
+查看 ai_chat_conversation 表结构，并给出索引设计上有哪些问题。
+```
+
+收到这类自然语言请求后，agent 一般会按下面的顺序工作：
+
+1. 先保存或读取数据库连接配置
+2. 再查询表结构、索引、字段定义和约束
+3. 最后输出对比结果、结构缺点和改进建议
+
+这意味着你平时只需要告诉 agent：
+
+- 连接到哪个数据库
+- 想查什么
+- 想比较什么
+- 想分析什么
+
+不需要自己记 `run_sql.py` 或 `db_registry.py` 的命令细节。
+
 ## 1. 项目目标
 
 `db-crud-guard` 解决两个核心问题：
@@ -132,45 +171,6 @@ python3 -m pip install --user '.[postgres]'
 
 请按安装文档迁移 `scripts/` 和 `references/` 到技能目录：
 - `CODEX_INSTALL.md`
-
-## 自然语言使用（推荐）
-
-安装完成后，正常使用时不需要记脚本命令，直接把数据库配置和目标告诉 agent 即可。
-
-在 skill 已安装、Python 依赖已就绪的前提下，agent 会自动复用 `db-crud-guard` 的连接管理和 SQL 执行能力，不需要你手工拼命令。
-
-例如你可以直接这样说：
-
-```text
-为 db-crud-guard 添加一个 mysql 连接，ip 是 10.1.1.1，默认端口，用户名 user，密码 user。
-```
-
-```text
-帮我对比一下表1和表2 的区别。
-```
-
-```text
-分析一下 member_user 表结构有哪些缺点。
-```
-
-```text
-查看 ai_chat_conversation 表结构，并给出索引设计上有哪些问题。
-```
-
-收到这类自然语言请求后，agent 一般会按下面的顺序工作：
-
-1. 先保存或读取数据库连接配置
-2. 再查询表结构、索引、字段定义和约束
-3. 最后输出对比结果、结构缺点和改进建议
-
-这意味着你平时只需要告诉 agent：
-
-- 连接到哪个数据库
-- 想查什么
-- 想比较什么
-- 想分析什么
-
-不需要自己记 `run_sql.py` 或 `db_registry.py` 的命令细节。
 
 ## 6. 快速使用
 

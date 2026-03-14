@@ -5,6 +5,9 @@
 """
 
 import argparse
+import base64
+import datetime
+import decimal
 import json
 import re
 import sqlite3
@@ -273,6 +276,31 @@ def rows_to_dicts(rows: List[Any], columns: List[str]) -> List[Dict[str, Any]]:
     return result
 
 
+def json_default(value: Any) -> Any:
+    """
+    统一处理数据库常见“非 JSON 原生类型”。
+    这里集中做转换，能保证脚本所有 JSON 输出行为一致，避免某个分支忘记处理再次报错。
+    """
+    if isinstance(value, datetime.datetime):
+        # datetime 按 ISO 格式输出，既保留精度，也便于机器和人类同时阅读。
+        return value.isoformat(sep=" ", timespec="microseconds")
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, datetime.time):
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        # Decimal 转字符串而不是 float，避免金额等高精度字段丢精度。
+        return str(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        # 二进制字段用 base64 输出，保证可逆且不会因为乱码导致 JSON 非法。
+        return base64.b64encode(bytes(value)).decode("ascii")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def dump_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, default=json_default)
+
+
 def execute_sql(conn, sql: str, params: Optional[Any]) -> Tuple[int, List[Dict[str, Any]]]:
     cursor = conn.cursor()
     try:
@@ -311,7 +339,7 @@ def main() -> int:
 
         # 统一输出 JSON，便于后续自动化流程直接消费，不需要再解析人类文本。
         print(
-            json.dumps(
+            dump_json(
                 {
                     "ok": True,
                     "engine": args.engine,
@@ -320,8 +348,7 @@ def main() -> int:
                     "affected_rows": affected_rows,
                     "returned_rows": len(rows),
                     "rows": rows,
-                },
-                ensure_ascii=False,
+                }
             )
         )
         return 0
@@ -332,14 +359,13 @@ def main() -> int:
             except Exception:
                 pass
         print(
-            json.dumps(
+            dump_json(
                 {
                     "ok": False,
                     "statement_type": keyword or None,
                     "is_write": is_write,
                     "error": str(exc),
-                },
-                ensure_ascii=False,
+                }
             )
         )
         return 1

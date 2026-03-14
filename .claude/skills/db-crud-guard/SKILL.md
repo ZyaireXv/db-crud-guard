@@ -9,6 +9,20 @@ description: Safely execute database CRUD SQL for SQLite, MySQL, and PostgreSQL 
 
 `python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" ...`
 
+如果是长期任务，先录入连接再按名称执行：
+
+```bash
+echo 'your-password' | python3 "$CLAUDE_SKILL_DIR/scripts/db_registry.py" add \
+  --name test-mysql \
+  --engine mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user app \
+  --database entropat \
+  --password-stdin \
+  --set-default
+```
+
 ## 执行流程
 
 1. 先确认目标环境和连接参数，避免误连生产库。
@@ -47,6 +61,14 @@ python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" \
   --params-json "[\"新昵称\", 1001]" \
   --allow-write \
   --confirm CONFIRM_WRITE
+```
+
+### 按持久化连接执行
+
+```bash
+python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" \
+  --conn test-mysql \
+  --sql "SELECT id, nickname FROM member_user LIMIT 20"
 ```
 
 ## 安全约束

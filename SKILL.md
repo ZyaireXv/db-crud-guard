@@ -14,6 +14,28 @@ description: 直连 SQLite、MySQL、PostgreSQL 数据库并执行 SQL 增删改
 4. 写操作必须同时传 `--allow-write --confirm CONFIRM_WRITE`，否则脚本会拒绝执行。
 5. `UPDATE/DELETE` 默认要求 `WHERE` 条件；如果确实需要全表操作，再显式传 `--allow-full-table-write`。
 
+## 连接持久化
+
+如果是长期使用同一批数据库，先录入连接，再按连接名执行，避免重复传敏感信息：
+
+```bash
+python3 scripts/db_registry.py add \
+  --name test-mysql \
+  --engine mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user app \
+  --database entropat \
+  --password-stdin \
+  --set-default
+```
+
+```bash
+python3 scripts/run_sql.py \
+  --conn test-mysql \
+  --sql "SELECT 1"
+```
+
 ## 快速命令
 
 ### SQLite 查询
@@ -67,6 +89,8 @@ python3 scripts/run_sql.py \
 ## 资源说明
 
 - `scripts/run_sql.py`：统一 SQL 执行入口（SQLite/MySQL/PostgreSQL）
+- `scripts/db_registry.py`：连接注册表管理（增删改查、默认连接）
+- `scripts/registry_store.py`：注册表与密码存储公共逻辑
 - `references/security-checklist.md`：执行前后核对清单
 
 ## 依赖说明

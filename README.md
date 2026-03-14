@@ -37,6 +37,7 @@
 ## 2. 核心能力
 
 - 统一执行脚本：`scripts/run_sql.py`
+- 连接注册表管理：`scripts/db_registry.py`
 - 支持数据库：`sqlite`、`mysql`、`postgres`
 - 支持语句：`SELECT/INSERT/UPDATE/DELETE/REPLACE`
 - 默认只读：写操作需要显式确认
@@ -52,7 +53,9 @@
 db-crud-guard/
 ├── SKILL.md                                  # 通用技能说明
 ├── scripts/
-│   └── run_sql.py                            # 统一 SQL 执行脚本
+│   ├── run_sql.py                            # 统一 SQL 执行脚本
+│   ├── db_registry.py                        # 连接注册表管理脚本
+│   └── registry_store.py                     # 注册表与密码存储公共层
 ├── references/
 │   └── security-checklist.md                 # 执行前后核对清单
 ├── .agent/skills/db-crud-guard/SKILL.md      # Antigravity 入口
@@ -147,7 +150,58 @@ python3 scripts/run_sql.py \
   --confirm CONFIRM_WRITE
 ```
 
-## 7. 安全策略说明
+## 7. 连接配置持久化（推荐）
+
+首次录入连接（只需一次）：
+
+```bash
+python3 scripts/db_registry.py add \
+  --name test-mysql \
+  --engine mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user app \
+  --database entropat \
+  --password-stdin \
+  --set-default
+```
+
+上面的命令会从 stdin 读取密码，例如：
+
+```bash
+echo 'your-password' | python3 scripts/db_registry.py add \
+  --name test-mysql \
+  --engine mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user app \
+  --database entropat \
+  --password-stdin \
+  --set-default
+```
+
+查看数据库列表：
+
+```bash
+python3 scripts/db_registry.py list
+```
+
+后续按连接名执行（不再重复传 IP/账号/密码）：
+
+```bash
+python3 scripts/run_sql.py \
+  --conn test-mysql \
+  --sql "SELECT id, nickname FROM member_user LIMIT 20"
+```
+
+也可以不传 `--conn`，直接使用默认连接：
+
+```bash
+python3 scripts/run_sql.py \
+  --sql "SELECT 1"
+```
+
+## 8. 安全策略说明
 
 - 写操作必须同时带：
   - `--allow-write`
@@ -158,7 +212,7 @@ python3 scripts/run_sql.py \
 - 出错自动回滚
 - 建议执行流程：先 `SELECT` 验证范围，再执行写入
 
-## 8. 输出格式
+## 9. 输出格式
 
 脚本始终输出 JSON。
 
@@ -187,13 +241,13 @@ python3 scripts/run_sql.py \
 }
 ```
 
-## 9. 最佳实践
+## 10. 最佳实践
 
 - 生产环境使用最小权限账号，避免使用 `root`
 - 参数化 SQL，避免字符串拼接
 - 保留执行记录（SQL、时间、影响行数）
 - 高风险变更提前准备回滚方案
 
-## 10. 许可证
+## 11. 许可证
 
 本项目采用 `MIT` 许可证，详见 [LICENSE](LICENSE)。

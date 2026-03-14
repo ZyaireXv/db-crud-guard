@@ -14,6 +14,8 @@ import sqlite3
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+from registry_store import get_connection_runtime_config, init_registry, resolve_registry_path
+
 WRITE_CONFIRM_TOKEN = "CONFIRM_WRITE"
 WRITE_KEYWORDS = {"insert", "update", "delete", "replace"}
 ALLOWED_KEYWORDS = {"select", "insert", "update", "delete", "replace"}
@@ -21,8 +23,10 @@ ALLOWED_KEYWORDS = {"select", "insert", "update", "delete", "replace"}
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="执行单条 SQL，并输出结构化结果。")
-    parser.add_argument("--engine", required=True, choices=["sqlite", "mysql", "postgres"])
-    parser.add_argument("--database", required=True, help="SQLite 文件路径或数据库名")
+    parser.add_argument("--conn", help="使用持久化连接名（由 db_registry.py 管理）")
+    parser.add_argument("--registry", help="连接注册表路径，默认 .db-crud-guard/registry.db")
+    parser.add_argument("--engine", choices=["sqlite", "mysql", "postgres"])
+    parser.add_argument("--database", help="SQLite 文件路径或数据库名")
     parser.add_argument("--host", help="MySQL/PostgreSQL 主机地址")
     parser.add_argument("--port", type=int, help="MySQL/PostgreSQL 端口")
     parser.add_argument("--user", help="MySQL/PostgreSQL 用户名")
@@ -199,50 +203,90 @@ def ensure_write_guard(sql: str, keyword: str, is_write: bool, args: argparse.Na
             raise ValueError("UPDATE/DELETE 未检测到 WHERE，已拦截。若确需全表操作，请显式传 --allow-full-table-write")
 
 
-def require_network_args(args: argparse.Namespace) -> None:
-    missing = [name for name in ("host", "user", "password") if not getattr(args, name)]
+def require_network_args(db_config: Dict[str, Any]) -> None:
+    missing = [name for name in ("host", "user", "password") if not db_config.get(name)]
     if missing:
-        raise ValueError(f"{args.engine} 连接缺少参数: {', '.join(missing)}")
+        raise ValueError(f"{db_config['engine']} 连接缺少参数: {', '.join(missing)}")
 
 
-def connect_database(args: argparse.Namespace):
-    if args.engine == "sqlite":
-        conn = sqlite3.connect(args.database, timeout=args.timeout)
+def build_db_config(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    构造数据库连接配置，支持两种输入模式：
+    1) 直连参数模式：--engine/--database...
+    2) 持久化连接模式：--conn（从注册表加载）
+    """
+    if args.conn:
+        # --conn 模式不允许再混用连接参数，避免“谁覆盖谁”的歧义导致误连库。
+        mixed_args = ["engine", "database", "host", "port", "user", "password"]
+        used_mixed = [key for key in mixed_args if getattr(args, key) not in (None, "")]
+        if used_mixed:
+            raise ValueError(f"--conn 模式下不允许混用连接参数: {', '.join(used_mixed)}")
+
+        registry_path = resolve_registry_path(args.registry)
+        init_registry(registry_path)
+        return get_connection_runtime_config(registry_path, name=args.conn)
+
+    direct_mode_fields = ["engine", "database", "host", "port", "user", "password"]
+    used_direct_mode = any(getattr(args, key) not in (None, "") for key in direct_mode_fields)
+    if not used_direct_mode:
+        # 未提供任何直连参数时，自动走默认连接，减少重复输入连接信息。
+        registry_path = resolve_registry_path(args.registry)
+        init_registry(registry_path)
+        return get_connection_runtime_config(registry_path, name=None)
+
+    if not args.engine or not args.database:
+        raise ValueError("直连模式必须提供 --engine 和 --database；或使用 --conn/默认连接模式")
+
+    return {
+        "name": None,
+        "engine": args.engine,
+        "host": args.host,
+        "port": args.port,
+        "database": args.database,
+        "user": args.user,
+        "password": args.password,
+        "params": {},
+    }
+
+
+def connect_database(db_config: Dict[str, Any], timeout: int):
+    if db_config["engine"] == "sqlite":
+        conn = sqlite3.connect(db_config["database"], timeout=timeout)
         conn.row_factory = sqlite3.Row
         return conn
 
-    if args.engine == "mysql":
-        require_network_args(args)
+    if db_config["engine"] == "mysql":
+        require_network_args(db_config)
         try:
             import pymysql
         except ModuleNotFoundError as exc:
             raise RuntimeError("未安装 pymysql，请先执行: python3 -m pip install --user pymysql") from exc
 
         conn = pymysql.connect(
-            host=args.host,
-            port=args.port or 3306,
-            user=args.user,
-            password=args.password,
-            database=args.database,
-            connect_timeout=args.timeout,
+            host=db_config["host"],
+            port=db_config["port"] or 3306,
+            user=db_config["user"],
+            password=db_config["password"],
+            database=db_config["database"],
+            connect_timeout=timeout,
             charset="utf8mb4",
             autocommit=False,
             cursorclass=pymysql.cursors.DictCursor,
         )
         return conn
 
-    if args.engine == "postgres":
-        require_network_args(args)
+    if db_config["engine"] == "postgres":
+        require_network_args(db_config)
         try:
             import psycopg  # type: ignore
 
             return psycopg.connect(
-                host=args.host,
-                port=args.port or 5432,
-                user=args.user,
-                password=args.password,
-                dbname=args.database,
-                connect_timeout=args.timeout,
+                host=db_config["host"],
+                port=db_config["port"] or 5432,
+                user=db_config["user"],
+                password=db_config["password"],
+                dbname=db_config["database"],
+                connect_timeout=timeout,
             )
         except ModuleNotFoundError:
             try:
@@ -252,15 +296,15 @@ def connect_database(args: argparse.Namespace):
                     "未安装 PostgreSQL 驱动，请先安装 psycopg 或 psycopg2: python3 -m pip install --user psycopg"
                 ) from exc
             return psycopg2.connect(
-                host=args.host,
-                port=args.port or 5432,
-                user=args.user,
-                password=args.password,
-                dbname=args.database,
-                connect_timeout=args.timeout,
+                host=db_config["host"],
+                port=db_config["port"] or 5432,
+                user=db_config["user"],
+                password=db_config["password"],
+                dbname=db_config["database"],
+                connect_timeout=timeout,
             )
 
-    raise ValueError(f"不支持的引擎: {args.engine}")
+    raise ValueError(f"不支持的引擎: {db_config['engine']}")
 
 
 def rows_to_dicts(rows: List[Any], columns: List[str]) -> List[Dict[str, Any]]:
@@ -324,15 +368,17 @@ def main() -> int:
     sql = ""
     is_write = False
     keyword = ""
+    db_config: Dict[str, Any] = {}
 
     try:
+        db_config = build_db_config(args)
         sql = load_sql(args)
         ensure_single_statement(sql)
         params = parse_params(args.params_json)
         keyword, is_write = classify_sql(sql)
         ensure_write_guard(sql, keyword, is_write, args)
 
-        conn = connect_database(args)
+        conn = connect_database(db_config, timeout=args.timeout)
         affected_rows, rows = execute_sql(conn, sql, params)
         if is_write:
             conn.commit()
@@ -342,7 +388,8 @@ def main() -> int:
             dump_json(
                 {
                     "ok": True,
-                    "engine": args.engine,
+                    "connection_name": db_config.get("name"),
+                    "engine": db_config["engine"],
                     "statement_type": keyword,
                     "is_write": is_write,
                     "affected_rows": affected_rows,
@@ -362,6 +409,7 @@ def main() -> int:
             dump_json(
                 {
                     "ok": False,
+                    "connection_name": db_config.get("name"),
                     "statement_type": keyword or None,
                     "is_write": is_write,
                     "error": str(exc),

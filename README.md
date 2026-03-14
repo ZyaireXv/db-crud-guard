@@ -166,3 +166,7 @@ python3 scripts/run_sql.py \
 - 参数化 SQL，避免字符串拼接
 - 保留执行记录（SQL、时间、影响行数）
 - 高风险变更提前准备回滚方案
+
+## 10. 许可证
+
+本项目采用 `MIT` 许可证，详见 [LICENSE](LICENSE)。

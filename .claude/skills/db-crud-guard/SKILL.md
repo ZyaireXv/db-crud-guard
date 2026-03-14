@@ -7,7 +7,7 @@ description: Safely execute database CRUD SQL for SQLite, MySQL, and PostgreSQL 
 
 优先复用仓库已有执行脚本，不要重复实现数据库连接逻辑：
 
-`python3 "$CLAUDE_SKILL_DIR/../../../scripts/run_sql.py" ...`
+`python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" ...`
 
 ## 执行流程
 
@@ -22,7 +22,7 @@ description: Safely execute database CRUD SQL for SQLite, MySQL, and PostgreSQL 
 ### 查询
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/../../../scripts/run_sql.py" \
+python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" \
   --engine mysql \
   --host 127.0.0.1 \
   --port 3306 \
@@ -36,7 +36,7 @@ python3 "$CLAUDE_SKILL_DIR/../../../scripts/run_sql.py" \
 ### 受控更新
 
 ```bash
-python3 "$CLAUDE_SKILL_DIR/../../../scripts/run_sql.py" \
+python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" \
   --engine mysql \
   --host 127.0.0.1 \
   --port 3306 \
@@ -54,4 +54,4 @@ python3 "$CLAUDE_SKILL_DIR/../../../scripts/run_sql.py" \
 1. 只允许单条 SQL，多语句会被拦截。
 2. 只支持 `SELECT/INSERT/UPDATE/DELETE/REPLACE`，拒绝 DDL 语句。
 3. 写入失败自动回滚事务，防止半成功污染数据。
-4. 更完整核对清单见：`$CLAUDE_SKILL_DIR/../../../references/security-checklist.md`
+4. 更完整核对清单见：`$CLAUDE_SKILL_DIR/references/security-checklist.md`

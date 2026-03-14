@@ -33,7 +33,7 @@ db-crud-guard/
 │   └── run_sql.py                            # 统一 SQL 执行脚本
 ├── references/
 │   └── security-checklist.md                 # 执行前后核对清单
-├── .agents/skills/db-crud-guard/SKILL.md     # Antigravity 入口
+├── .agent/skills/db-crud-guard/SKILL.md      # Antigravity 入口
 └── .claude/skills/db-crud-guard/SKILL.md     # Claude Code 入口
 ```
 
@@ -71,10 +71,11 @@ python3 -m pip install --user psycopg2
 将技能目录放在工作区：
 
 ```text
-<workspace-root>/.agents/skills/db-crud-guard/SKILL.md
+<workspace-root>/.agent/skills/db-crud-guard/SKILL.md
 ```
 
-本仓库已提供该路径下的入口文件，可直接复制使用。
+请按安装文档迁移 `scripts/` 和 `references/` 到技能目录：
+- `ANTIGRAVITY_INSTALL.md`
 
 ### 5.2 Claude Code（cc）
 
@@ -84,7 +85,8 @@ python3 -m pip install --user psycopg2
 <workspace-root>/.claude/skills/db-crud-guard/SKILL.md
 ```
 
-本仓库已提供该路径下的入口文件，可直接复制使用。
+请按安装文档迁移 `scripts/` 和 `references/` 到技能目录：
+- `CLAUDE_INSTALL.md`
 
 ## 6. 快速使用
 

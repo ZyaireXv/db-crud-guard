@@ -15,6 +15,17 @@ description: 直连 SQLite、MySQL、PostgreSQL 数据库并执行 SQL 增删改
 5. `UPDATE/DELETE` 默认要求有效 `WHERE` 条件；像 `WHERE 1=1`、`WHERE TRUE` 这类纯恒真条件也会被拦截。
 6. `INSERT ... SELECT / REPLACE ... SELECT` 默认视为批量写入；如果确实要执行，再显式传 `--allow-bulk-write`。
 
+## 自然语言触发示例
+
+安装好 skill 后，用户不一定会直接说命令，更常见的是直接描述目标。下面这些表达都应该触发这个 skill：
+
+- `为 db-crud-guard 添加一个 mysql 连接，ip 是 10.1.1.1，默认端口，用户名 user，密码 user。`
+- `帮我对比一下表1和表2 的区别。`
+- `分析一下 member_user 表结构有哪些缺点。`
+- `查看 ai_chat_conversation 表结构，并给出索引设计建议。`
+
+处理这类请求时，优先帮用户把“连接配置、结构查询、差异分析、风险提示”串成一个完整流程，不要只停留在给命令。
+
 ## 连接持久化
 
 如果是长期使用同一批数据库，先录入连接，再按连接名执行，避免重复传敏感信息：
@@ -93,6 +104,12 @@ python3 scripts/run_sql.py \
 4. `INSERT ... SELECT / REPLACE ... SELECT` 默认需要额外传 `--allow-bulk-write`，防止把批量导入当普通写入误跑。
 5. 脚本失败时会回滚写事务，防止半成功状态污染数据。
 6. 非 CRUD 语句（如 `DROP/ALTER/TRUNCATE`）会被拒绝，避免越权执行结构变更。
+
+## 环境建议
+
+1. 推荐优先用于开发环境、测试环境、预发布环境。
+2. 如果要连生产库，优先使用最小权限账号，默认按只读思路工作。
+3. 即使用户直接给了连接信息，也要先提醒环境风险，避免把“能连上”误解成“适合直接写入”。
 
 完整安全建议见 [references/security-checklist.md](references/security-checklist.md)。
 

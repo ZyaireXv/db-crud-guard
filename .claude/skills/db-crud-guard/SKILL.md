@@ -23,6 +23,14 @@ echo 'your-password' | python3 "$CLAUDE_SKILL_DIR/scripts/db_registry.py" add \
   --set-default
 ```
 
+用户也可能直接用自然语言描述目标，不会先说命令，例如：
+
+- `为 db-crud-guard 添加一个 mysql 连接，ip 是 10.1.1.1，默认端口，用户名 user，密码 user。`
+- `帮我对比一下表1和表2 的区别。`
+- `分析一下 member_user 表结构有哪些缺点。`
+
+遇到这类请求时，应该直接进入连接录入、结构查询、差异分析的完整流程，而不是只回复脚本用法。
+
 ## 执行流程
 
 1. 先确认目标环境和连接参数，避免误连生产库。
@@ -31,6 +39,8 @@ echo 'your-password' | python3 "$CLAUDE_SKILL_DIR/scripts/db_registry.py" add \
 4. `UPDATE/DELETE` 默认要求有效 `WHERE`；像 `WHERE 1=1` 这类纯恒真条件也会被拦截。
 5. `INSERT ... SELECT / REPLACE ... SELECT` 默认要求额外传 `--allow-bulk-write`。
 6. 读取 JSON 输出中的 `ok`、`affected_rows`、`rows`、`error` 字段判断结果。
+
+推荐优先在开发环境、测试环境、预发布环境使用；如果用户给的是生产库，先提醒最小权限和只读优先原则。
 
 ## 常用命令
 

@@ -1,6 +1,6 @@
 ---
 name: db-crud-guard
-description: Safely execute database CRUD SQL for SQLite, MySQL, and PostgreSQL with write confirmation and full-table protection. Use when querying data, fixing dirty data, or performing controlled INSERT/UPDATE/DELETE operations.
+description: Safely execute database CRUD SQL for SQLite, MySQL, and PostgreSQL with write confirmation, full-table protection, and bulk-write protection. Use when querying data, fixing dirty data, or performing controlled INSERT/UPDATE/DELETE operations.
 ---
 
 # DB CRUD Guard
@@ -28,10 +28,18 @@ echo 'your-password' | python3 "$CLAUDE_SKILL_DIR/scripts/db_registry.py" add \
 1. 先确认目标环境和连接参数，避免误连生产库。
 2. 先执行 `SELECT` 验证命中范围，再执行写操作。
 3. 写操作必须携带 `--allow-write --confirm CONFIRM_WRITE`。
-4. `UPDATE/DELETE` 默认要求 `WHERE`，否则会被拦截。
-5. 读取 JSON 输出中的 `ok`、`affected_rows`、`rows`、`error` 字段判断结果。
+4. `UPDATE/DELETE` 默认要求有效 `WHERE`；像 `WHERE 1=1` 这类纯恒真条件也会被拦截。
+5. `INSERT ... SELECT / REPLACE ... SELECT` 默认要求额外传 `--allow-bulk-write`。
+6. 读取 JSON 输出中的 `ok`、`affected_rows`、`rows`、`error` 字段判断结果。
 
 ## 常用命令
+
+统一占位符约定：
+
+- 位置参数统一写 `%s`
+- 命名参数统一写 `%(name)s`
+
+SQLite 会在执行前自动转换成 `?` / `:name`，所以同一条 SQL 可以跨库复用。
 
 ### 查询
 
@@ -75,5 +83,7 @@ python3 "$CLAUDE_SKILL_DIR/scripts/run_sql.py" \
 
 1. 只允许单条 SQL，多语句会被拦截。
 2. 只支持 `SELECT/INSERT/UPDATE/DELETE/REPLACE`，拒绝 DDL 语句。
-3. 写入失败自动回滚事务，防止半成功污染数据。
-4. 更完整核对清单见：`$CLAUDE_SKILL_DIR/references/security-checklist.md`
+3. `UPDATE/DELETE` 的纯恒真 `WHERE` 会被拦截，避免表面有条件、实际仍是全表写入。
+4. 批量写入默认需要 `--allow-bulk-write`。
+5. 写入失败自动回滚事务，防止半成功污染数据。
+6. 更完整核对清单见：`$CLAUDE_SKILL_DIR/references/security-checklist.md`

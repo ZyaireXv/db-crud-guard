@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "db-crud-guard"
+version = "0.2.0"
+description = "面向 AI Agent 的安全数据库 CRUD 执行技能"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+# MySQL 与 PostgreSQL 驱动都保留成可选依赖，避免用户只用 SQLite 时被迫安装无关组件。
+mysql = ["pymysql>=1.1.0"]
+postgres = ["psycopg>=3.1.0"]
+postgres-legacy = ["psycopg2-binary>=2.9.0"]
+registry = ["keyring>=25.0.0"]
+dev = []
+
+[tool.setuptools]
+# 这个仓库目前以脚本为主，没有独立的 Python 包；显式声明为空，避免 setuptools 误扫目录。
+py-modules = []

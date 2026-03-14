@@ -19,6 +19,15 @@ from registry_store import get_connection_runtime_config, init_registry, resolve
 WRITE_CONFIRM_TOKEN = "CONFIRM_WRITE"
 WRITE_KEYWORDS = {"insert", "update", "delete", "replace"}
 ALLOWED_KEYWORDS = {"select", "insert", "update", "delete", "replace"}
+SQLITE_PLACEHOLDER_PREFIX = ":"
+TOP_LEVEL_CLAUSE_BOUNDARIES = ("order by", "limit", "returning", "offset")
+TRIVIAL_TRUE_WHERE_CLAUSES = {
+    "1=1",
+    "1 = 1",
+    "true",
+    "1",
+    "not false",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         "--allow-full-table-write",
         action="store_true",
         help="允许无 WHERE 的 UPDATE/DELETE（高风险）",
+    )
+    parser.add_argument(
+        "--allow-bulk-write",
+        action="store_true",
+        help="允许 INSERT ... SELECT / REPLACE ... SELECT 这类批量写入（高风险）",
     )
     return parser.parse_args()
 
@@ -168,6 +182,104 @@ def remove_leading_comments(sql: str) -> str:
         return text
 
 
+def mask_sql_literals_and_comments(sql: str) -> str:
+    """
+    把字符串字面量和注释替换成空格，但保留原始长度。
+
+    这样做的目的不是“解析完整 SQL 语法”，而是先把最容易干扰判断的内容屏蔽掉，
+    后面的关键字检测、占位符替换、WHERE 安全检查就不会被注释和字符串常量误导。
+    """
+    chars: List[str] = []
+    in_single_quote = False
+    in_double_quote = False
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+
+    while i < len(sql):
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < len(sql) else ""
+
+        if in_line_comment:
+            chars.append("\n" if ch == "\n" else " ")
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+            continue
+
+        if in_block_comment:
+            chars.append("\n" if ch == "\n" else " ")
+            if ch == "*" and nxt == "/":
+                chars.append(" ")
+                i += 2
+                in_block_comment = False
+                continue
+            i += 1
+            continue
+
+        if in_single_quote:
+            chars.append("\n" if ch == "\n" else " ")
+            if ch == "'" and nxt == "'":
+                chars.append(" ")
+                i += 2
+                continue
+            if ch == "'":
+                in_single_quote = False
+            i += 1
+            continue
+
+        if in_double_quote:
+            chars.append("\n" if ch == "\n" else " ")
+            if ch == '"' and nxt == '"':
+                chars.append(" ")
+                i += 2
+                continue
+            if ch == '"':
+                in_double_quote = False
+            i += 1
+            continue
+
+        if ch == "-" and nxt == "-":
+            chars.append(" ")
+            chars.append(" ")
+            i += 2
+            in_line_comment = True
+            continue
+
+        if ch == "/" and nxt == "*":
+            chars.append(" ")
+            chars.append(" ")
+            i += 2
+            in_block_comment = True
+            continue
+
+        if ch == "'":
+            chars.append(" ")
+            in_single_quote = True
+            i += 1
+            continue
+
+        if ch == '"':
+            chars.append(" ")
+            in_double_quote = True
+            i += 1
+            continue
+
+        chars.append(ch)
+        i += 1
+
+    return "".join(chars)
+
+
+def normalize_masked_sql(sql: str) -> str:
+    """
+    统一把 SQL 压平成便于比较的形式。
+
+    这里故意先做屏蔽再规范化空白，避免像 "where" 出现在字符串里时被误判成真实条件。
+    """
+    return re.sub(r"\s+", " ", mask_sql_literals_and_comments(sql).strip().lower())
+
+
 def classify_sql(sql: str) -> Tuple[str, bool]:
     clean = remove_leading_comments(sql)
     match = re.match(r"([a-zA-Z_]+)", clean)
@@ -177,6 +289,104 @@ def classify_sql(sql: str) -> Tuple[str, bool]:
     if keyword not in ALLOWED_KEYWORDS:
         raise ValueError("仅支持 SELECT/INSERT/UPDATE/DELETE/REPLACE，已拦截非 CRUD 语句")
     return keyword, keyword in WRITE_KEYWORDS
+
+
+def strip_balanced_wrapping_parentheses(text: str) -> str:
+    """
+    去掉最外层一对一对包裹的括号。
+
+    例如 `((1 = 1))` 会被化简成 `1 = 1`，这样后面的“恒真条件”判断才不会漏掉。
+    """
+    candidate = text.strip()
+    while candidate.startswith("(") and candidate.endswith(")"):
+        depth = 0
+        wrapped = True
+        for index, ch in enumerate(candidate):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and index != len(candidate) - 1:
+                    wrapped = False
+                    break
+        if not wrapped:
+            break
+        candidate = candidate[1:-1].strip()
+    return candidate
+
+
+def extract_top_level_where_clause(sql: str) -> Optional[str]:
+    """
+    提取 UPDATE/DELETE 顶层 WHERE 子句文本。
+
+    这里不追求完整 AST 级解析，只处理我们关心的顶层结构：
+    1. 先屏蔽字符串和注释，降低误判概率。
+    2. 再按括号层级扫描，尽量避开子查询里的 ORDER BY / LIMIT 干扰。
+    """
+    masked_sql = mask_sql_literals_and_comments(sql)
+    lowered_sql = masked_sql.lower()
+    where_match = re.search(r"\bwhere\b", lowered_sql)
+    if not where_match:
+        return None
+
+    start = where_match.end()
+    depth = 0
+    end = len(lowered_sql)
+    i = start
+
+    while i < len(lowered_sql):
+        ch = lowered_sql[i]
+        if ch == "(":
+            depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if depth > 0:
+                depth -= 1
+            i += 1
+            continue
+        if depth == 0:
+            for boundary in TOP_LEVEL_CLAUSE_BOUNDARIES:
+                if lowered_sql.startswith(boundary, i):
+                    prev_ok = i == 0 or lowered_sql[i - 1].isspace()
+                    next_index = i + len(boundary)
+                    next_ok = next_index >= len(lowered_sql) or lowered_sql[next_index].isspace()
+                    if prev_ok and next_ok:
+                        end = i
+                        i = len(lowered_sql)
+                        break
+        i += 1
+
+    clause = lowered_sql[start:end].strip()
+    if not clause:
+        return None
+    return re.sub(r"\s+", " ", clause)
+
+
+def is_trivial_true_where_clause(where_clause: str) -> bool:
+    """
+    识别最常见的“看起来有 WHERE，实际上还是全表”的条件。
+
+    我们这里只拦截纯恒真条件，不去冒进拦截更复杂的表达式，
+    目的是先把明显危险的情况收住，同时尽量避免误伤正常 SQL。
+    """
+    normalized = strip_balanced_wrapping_parentheses(where_clause)
+    return normalized in TRIVIAL_TRUE_WHERE_CLAUSES
+
+
+def is_bulk_source_write(sql: str, keyword: str) -> bool:
+    """
+    检测 INSERT ... SELECT / REPLACE ... SELECT 这类批量写入。
+
+    这类语句即便写得合法，也往往一次性影响大量数据，
+    和普通单行 INSERT 不是一个风险等级，所以单独要求额外放行。
+    """
+    if keyword not in {"insert", "replace"}:
+        return False
+    normalized = normalize_masked_sql(sql)
+    if " values " in f" {normalized} ":
+        return False
+    return " select " in f" {normalized} "
 
 
 def ensure_single_statement(sql: str) -> None:
@@ -196,11 +406,21 @@ def ensure_write_guard(sql: str, keyword: str, is_write: bool, args: argparse.Na
     if args.confirm != WRITE_CONFIRM_TOKEN:
         raise ValueError(f"检测到写操作，请添加 --confirm {WRITE_CONFIRM_TOKEN}")
 
-    # UPDATE/DELETE 默认必须带 WHERE，避免误改/误删整表。
+    # UPDATE/DELETE 默认必须带有效 WHERE，避免误改/误删整表。
     if keyword in {"update", "delete"} and not args.allow_full_table_write:
-        normalized = re.sub(r"\s+", " ", sql.strip().lower())
-        if " where " not in f" {normalized} ":
+        where_clause = extract_top_level_where_clause(sql)
+        if where_clause is None:
             raise ValueError("UPDATE/DELETE 未检测到 WHERE，已拦截。若确需全表操作，请显式传 --allow-full-table-write")
+        if is_trivial_true_where_clause(where_clause):
+            raise ValueError(
+                "UPDATE/DELETE 的 WHERE 条件为恒真表达式，仍等价于全表写入，已拦截。若确需执行，请显式传 --allow-full-table-write"
+            )
+
+    # INSERT ... SELECT / REPLACE ... SELECT 容易一次性写入大量数据，单独要求显式放行。
+    if is_bulk_source_write(sql, keyword) and not args.allow_bulk_write:
+        raise ValueError(
+            "检测到 INSERT ... SELECT / REPLACE ... SELECT 批量写入，已拦截。若确认范围无误，请显式传 --allow-bulk-write"
+        )
 
 
 def require_network_args(db_config: Dict[str, Any]) -> None:
@@ -251,6 +471,7 @@ def build_db_config(args: argparse.Namespace) -> Dict[str, Any]:
 
 def connect_database(db_config: Dict[str, Any], timeout: int):
     if db_config["engine"] == "sqlite":
+        db_config["driver"] = "sqlite3"
         conn = sqlite3.connect(db_config["database"], timeout=timeout)
         conn.row_factory = sqlite3.Row
         return conn
@@ -262,6 +483,7 @@ def connect_database(db_config: Dict[str, Any], timeout: int):
         except ModuleNotFoundError as exc:
             raise RuntimeError("未安装 pymysql，请先执行: python3 -m pip install --user pymysql") from exc
 
+        db_config["driver"] = "pymysql"
         conn = pymysql.connect(
             host=db_config["host"],
             port=db_config["port"] or 3306,
@@ -279,7 +501,9 @@ def connect_database(db_config: Dict[str, Any], timeout: int):
         require_network_args(db_config)
         try:
             import psycopg  # type: ignore
+            from psycopg.rows import dict_row  # type: ignore
 
+            db_config["driver"] = "psycopg"
             return psycopg.connect(
                 host=db_config["host"],
                 port=db_config["port"] or 5432,
@@ -287,14 +511,17 @@ def connect_database(db_config: Dict[str, Any], timeout: int):
                 password=db_config["password"],
                 dbname=db_config["database"],
                 connect_timeout=timeout,
+                row_factory=dict_row,
             )
         except ModuleNotFoundError:
             try:
                 import psycopg2  # type: ignore
+                import psycopg2.extras  # type: ignore
             except ModuleNotFoundError as exc:
                 raise RuntimeError(
                     "未安装 PostgreSQL 驱动，请先安装 psycopg 或 psycopg2: python3 -m pip install --user psycopg"
                 ) from exc
+            db_config["driver"] = "psycopg2"
             return psycopg2.connect(
                 host=db_config["host"],
                 port=db_config["port"] or 5432,
@@ -345,8 +572,107 @@ def dump_json(payload: Dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, default=json_default)
 
 
-def execute_sql(conn, sql: str, params: Optional[Any]) -> Tuple[int, List[Dict[str, Any]]]:
-    cursor = conn.cursor()
+def replace_sqlite_named_placeholders(sql: str) -> Tuple[str, List[str]]:
+    """
+    把统一写法 `%(name)s` 转成 SQLite 可直接执行的 `:name`。
+
+    之所以选 `%(... )s` 作为统一写法，是因为 MySQL/PostgreSQL 原生就支持，
+    只需要在 SQLite 这里做一次转换，就能让文档和调用姿势保持一致。
+    """
+    masked_sql = mask_sql_literals_and_comments(sql)
+    result: List[str] = []
+    used_names: List[str] = []
+    index = 0
+
+    while index < len(sql):
+        if masked_sql.startswith("%(", index):
+            match = re.match(r"%\(([A-Za-z_][A-Za-z0-9_]*)\)s", sql[index:])
+            if match:
+                name = match.group(1)
+                result.append(f"{SQLITE_PLACEHOLDER_PREFIX}{name}")
+                used_names.append(name)
+                index += len(match.group(0))
+                continue
+        result.append(sql[index])
+        index += 1
+
+    return "".join(result), used_names
+
+
+def replace_sqlite_positional_placeholders(sql: str) -> Tuple[str, int]:
+    """
+    把统一写法 `%s` 转成 SQLite 的 `?`。
+
+    这里只替换真实 SQL 代码中的占位符，不碰字符串和注释，避免把普通文本误改掉。
+    """
+    masked_sql = mask_sql_literals_and_comments(sql)
+    result: List[str] = []
+    count = 0
+    index = 0
+
+    while index < len(sql):
+        if masked_sql.startswith("%s", index):
+            result.append("?")
+            count += 1
+            index += 2
+            continue
+        result.append(sql[index])
+        index += 1
+
+    return "".join(result), count
+
+
+def prepare_sql_and_params(engine: str, sql: str, params: Optional[Any]) -> Tuple[str, Optional[Any]]:
+    """
+    把“统一入口”的参数写法整理成具体驱动能执行的形式。
+
+    约定如下：
+    1. 位置参数统一用 `%s`
+    2. 命名参数统一用 `%(name)s`
+    3. SQLite 在执行前自动转换成 `?` / `:name`
+
+    这样调用方不用再记住每个驱动各自的小差异，真正做到同一套调用姿势跨库复用。
+    """
+    if params is None:
+        return sql, None
+
+    if engine != "sqlite":
+        return sql, params
+
+    if isinstance(params, list):
+        prepared_sql, placeholder_count = replace_sqlite_positional_placeholders(sql)
+        if placeholder_count and placeholder_count != len(params):
+            raise ValueError(
+                f"SQL 中位置参数数量({placeholder_count})与 --params-json 数组长度({len(params)})不一致"
+            )
+        return prepared_sql, params
+
+    if isinstance(params, dict):
+        prepared_sql, used_names = replace_sqlite_named_placeholders(sql)
+        missing_names = [name for name in used_names if name not in params]
+        if missing_names:
+            raise ValueError(f"命名参数缺失: {', '.join(sorted(set(missing_names)))}")
+        return prepared_sql, params
+
+    return sql, params
+
+
+def create_cursor(conn, db_config: Dict[str, Any]):
+    """
+    为不同驱动显式选定游标行为，避免依赖第三方库默认值。
+
+    PostgreSQL 这里尤其重要：psycopg3 和 psycopg2 的默认返回行格式并不完全一致，
+    如果不收口，后续同一段 rows_to_dicts 逻辑就可能出现“今天能跑，换个驱动又飘了”的问题。
+    """
+    if db_config["engine"] == "postgres" and db_config.get("driver") == "psycopg2":
+        import psycopg2.extras  # type: ignore
+
+        return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    return conn.cursor()
+
+
+def execute_sql(conn, db_config: Dict[str, Any], sql: str, params: Optional[Any]) -> Tuple[int, List[Dict[str, Any]]]:
+    cursor = create_cursor(conn, db_config)
     try:
         if params is None:
             cursor.execute(sql)
@@ -377,9 +703,10 @@ def main() -> int:
         params = parse_params(args.params_json)
         keyword, is_write = classify_sql(sql)
         ensure_write_guard(sql, keyword, is_write, args)
+        prepared_sql, prepared_params = prepare_sql_and_params(db_config["engine"], sql, params)
 
         conn = connect_database(db_config, timeout=args.timeout)
-        affected_rows, rows = execute_sql(conn, sql, params)
+        affected_rows, rows = execute_sql(conn, db_config, prepared_sql, prepared_params)
         if is_write:
             conn.commit()
 

@@ -41,10 +41,12 @@
 - 支持数据库：`sqlite`、`mysql`、`postgres`
 - 支持语句：`SELECT/INSERT/UPDATE/DELETE/REPLACE`
 - 默认只读：写操作需要显式确认
-- 默认拦截无 `WHERE` 的 `UPDATE/DELETE`
+- 默认拦截无 `WHERE` 或纯恒真 `WHERE` 的 `UPDATE/DELETE`
+- 默认拦截 `INSERT ... SELECT / REPLACE ... SELECT` 这类批量写入
 - 默认拦截多语句执行
 - 默认拒绝非 CRUD 语句（如 `DROP/ALTER/TRUNCATE`）
 - 写入失败自动回滚
+- SQLite 自动兼容统一占位符写法
 - 输出统一 JSON，方便自动化处理
 
 ## 3. 目录结构
@@ -89,6 +91,19 @@ python3 -m pip install --user psycopg2
 
 `SQLite` 使用 Python 内置 `sqlite3`，无需额外安装。
 
+如果你希望把依赖声明交给项目自身管理，也可以直接使用可选依赖：
+
+```bash
+# 只安装连接注册表的安全存储能力
+python3 -m pip install --user '.[registry]'
+
+# 安装 MySQL 支持
+python3 -m pip install --user '.[mysql]'
+
+# 安装 PostgreSQL 支持（psycopg3）
+python3 -m pip install --user '.[postgres]'
+```
+
 ## 5. 在不同平台启用技能
 
 ### 5.1 Antigravity
@@ -120,7 +135,16 @@ python3 -m pip install --user psycopg2
 
 ## 6. 快速使用
 
-### 6.1 查询（只读）
+### 6.1 统一占位符约定
+
+为了让同一条 SQL 能跨 `SQLite / MySQL / PostgreSQL` 复用，脚本统一约定：
+
+- 位置参数使用 `%s`
+- 命名参数使用 `%(name)s`
+
+其中 SQLite 会在执行前自动转换为自身支持的 `?` 或 `:name`，所以调用方不需要为不同数据库改 SQL 写法。
+
+### 6.2 查询（只读）
 
 ```bash
 python3 scripts/run_sql.py \
@@ -134,7 +158,17 @@ python3 scripts/run_sql.py \
   --params-json "[1001]"
 ```
 
-### 6.2 写入（受控）
+命名参数示例：
+
+```bash
+python3 scripts/run_sql.py \
+  --engine sqlite \
+  --database ./tmp/test.db \
+  --sql "SELECT id, nickname FROM member_user WHERE id = %(user_id)s" \
+  --params-json '{"user_id": 1001}'
+```
+
+### 6.3 写入（受控）
 
 ```bash
 python3 scripts/run_sql.py \
@@ -147,6 +181,25 @@ python3 scripts/run_sql.py \
   --sql "UPDATE member_user SET nickname = %s WHERE id = %s" \
   --params-json "[\"新昵称\", 1001]" \
   --allow-write \
+  --confirm CONFIRM_WRITE
+```
+
+### 6.4 批量写入（额外确认）
+
+`INSERT ... SELECT` 和 `REPLACE ... SELECT` 默认会被拦截，因为它们很容易一次性影响大量数据。
+
+```bash
+python3 scripts/run_sql.py \
+  --engine mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user app \
+  --password '***' \
+  --database entropat \
+  --sql "INSERT INTO member_user_archive(id, nickname) SELECT id, nickname FROM member_user WHERE deleted = %s" \
+  --params-json "[1]" \
+  --allow-write \
+  --allow-bulk-write \
   --confirm CONFIRM_WRITE
 ```
 
@@ -206,11 +259,13 @@ python3 scripts/run_sql.py \
 - 写操作必须同时带：
   - `--allow-write`
   - `--confirm CONFIRM_WRITE`
-- `UPDATE/DELETE` 默认要求 `WHERE`
+- `UPDATE/DELETE` 默认要求有效 `WHERE`，`WHERE 1=1`、`WHERE TRUE` 这类纯恒真条件也会被拦截
+- `INSERT ... SELECT / REPLACE ... SELECT` 默认要求额外传 `--allow-bulk-write`
 - 仅允许单条语句
 - 仅允许 CRUD 语句
 - 出错自动回滚
 - 建议执行流程：先 `SELECT` 验证范围，再执行写入
+- 当前安全检查仍属于轻量语义检查，不是完整 SQL AST 解析；高风险变更仍建议先人工复核命中范围
 
 ## 9. 输出格式
 
@@ -237,7 +292,7 @@ python3 scripts/run_sql.py \
   "ok": false,
   "statement_type": "update",
   "is_write": true,
-  "error": "UPDATE/DELETE 未检测到 WHERE，已拦截。若确需全表操作，请显式传 --allow-full-table-write"
+  "error": "UPDATE/DELETE 的 WHERE 条件为恒真表达式，仍等价于全表写入，已拦截。若确需执行，请显式传 --allow-full-table-write"
 }
 ```
 
@@ -248,6 +303,12 @@ python3 scripts/run_sql.py \
 - 保留执行记录（SQL、时间、影响行数）
 - 高风险变更提前准备回滚方案
 
-## 11. 许可证
+## 11. 测试与 CI
+
+- 单元测试：`python3 -m unittest discover -s tests -p 'test_*.py' -v`
+- 语法校验：`python3 -m py_compile scripts/run_sql.py scripts/db_registry.py scripts/registry_store.py`
+- GitHub Actions：仓库已提供 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)，会在 `push` 和 `pull_request` 时自动执行校验
+
+## 12. 许可证
 
 本项目采用 `MIT` 许可证，详见 [LICENSE](LICENSE)。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "数据库 CRUD 执行器"
+  short_description: "直连目标数据库并执行带安全护栏的增删改查 SQL 操作"
+  default_prompt: "Use $db-crud-guard to connect to the target database and run controlled CRUD SQL with confirmation for write operations."

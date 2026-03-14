@@ -3,6 +3,28 @@
 一个面向 AI Agent 的数据库 CRUD 技能，提供统一 SQL 执行入口与默认安全护栏。  
 支持 `SQLite / MySQL / PostgreSQL`，用于安全执行 `SELECT / INSERT / UPDATE / DELETE / REPLACE`。
 
+## 安装说明（直接发给 Agent）
+
+直接将以下文本复制并发送给对应 Agent，即可按文档安装 skills：
+
+### Antigravity
+
+```text
+参考 https://github.com/ZyaireXv/db-crud-guard/blob/main/ANTIGRAVITY_INSTALL.md 安装 skills。
+```
+
+### Claude Code
+
+```text
+参考 https://github.com/ZyaireXv/db-crud-guard/blob/main/CLAUDE_INSTALL.md 安装 skills。
+```
+
+### Codex
+
+```text
+参考 https://github.com/ZyaireXv/db-crud-guard/blob/main/CODEX_INSTALL.md 安装 skills。
+```
+
 ## 1. 项目目标
 
 `db-crud-guard` 解决两个核心问题：
@@ -87,6 +109,11 @@ python3 -m pip install --user psycopg2
 
 请按安装文档迁移 `scripts/` 和 `references/` 到技能目录：
 - `CLAUDE_INSTALL.md`
+
+### 5.3 Codex
+
+请按安装文档迁移 `scripts/` 和 `references/` 到技能目录：
+- `CODEX_INSTALL.md`
 
 ## 6. 快速使用
 
